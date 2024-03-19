@@ -298,7 +298,7 @@ class ZipPlugin(JmOptionPlugin):
 
         # 原文件夹 -> zip文件
         dir_zip_dict: Dict[str, Optional[str]] = {}
-        photo_dict = downloader.all_downloaded[album]
+        photo_dict = downloader.download_success_dict[album]
 
         if level == 'album':
             zip_path = self.get_zip_path(album, None, filename_rule, suffix, zip_dir)
@@ -383,7 +383,7 @@ class ZipPlugin(JmOptionPlugin):
         dirs = sorted(dir_zip_dict.keys(), reverse=True)
         image_paths = [
             path
-            for photo_dict in self.downloader.all_downloaded.values()
+            for photo_dict in self.downloader.download_success_dict.values()
             for image_list in photo_dict.values()
             for path, image in image_list
         ]
@@ -752,7 +752,7 @@ class ConvertJpgToPdfPlugin(JmOptionPlugin):
 
             paths = [
                 path
-                for path, image in downloader.all_downloaded[photo.from_album][photo]
+                for path, image in downloader.download_success_dict[photo.from_album][photo]
             ]
 
             paths.append(self.option.decide_image_save_dir(photo, ensure_exists=False))
@@ -814,8 +814,6 @@ class JmServerPlugin(JmOptionPlugin):
             if self.running is True:
                 return
 
-            self.running = True
-
             # 服务器的代码位于一个独立库：plugin_jm_server，需要独立安装
             # 源代码仓库：https://github.com/hect0x7/plugin-jm-server
             try:
@@ -842,6 +840,7 @@ class JmServerPlugin(JmOptionPlugin):
                     # 不是主线程，return
                     return self.warning_wrong_usage_of_debug()
                 else:
+                    self.running = True
                     # 是主线程，启动服务器
                     blocking_run_server()
 
@@ -849,6 +848,7 @@ class JmServerPlugin(JmOptionPlugin):
                 # 非debug模式，开新线程启动
                 threading.Thread(target=blocking_run_server, daemon=True).start()
                 atexit_register(self.wait_server_stop)
+                self.running = True
 
     def warning_wrong_usage_of_debug(self):
         self.log('注意！当配置debug=True时，请确保当前插件是在主线程中被调用。\n'
@@ -903,3 +903,63 @@ class JmServerPlugin(JmOptionPlugin):
             instance = JmServerPlugin(option)
             setattr(cls, field_name, instance)
             return instance
+
+
+class SubscribeAlbumUpdatePlugin(JmOptionPlugin):
+    plugin_key = 'subscribe_album_update'
+
+    def invoke(self,
+               album_photo_dict=None,
+               email_notify=None,
+               download_if_has_update=True,
+               auto_update_after_download=True,
+               ) -> None:
+        if album_photo_dict is None:
+            return
+
+        album_photo_dict: Dict
+        for album_id, photo_id in album_photo_dict.copy().items():
+            # check update
+            try:
+                has_update, photo_new_list = self.check_photo_update(album_id, photo_id)
+            except JmcomicException as e:
+                self.log('Exception happened: ' + str(e), 'check_update.error')
+                continue
+
+            if has_update is False:
+                continue
+
+            self.log(f'album={album_id}，发现新章节: {photo_new_list}，准备开始下载')
+
+            # send email
+            try:
+                if email_notify:
+                    SendQQEmailPlugin.build(self.option).invoke(**email_notify)
+            except PluginValidationException:
+                # ignore
+                pass
+
+            # download new photo
+            if has_update and download_if_has_update:
+                self.option.download_photo(photo_new_list)
+
+            if auto_update_after_download:
+                album_photo_dict[album_id] = photo_new_list[-1]
+                self.option.to_file()
+
+    def check_photo_update(self, album_id: str, photo_id: str):
+        client = self.option.new_jm_client()
+        album = client.get_album_detail(album_id)
+
+        photo_new_list = []
+        is_new_photo = False
+        sentinel = int(photo_id)
+
+        for photo in album:
+            if is_new_photo:
+                photo_new_list.append(photo.photo_id)
+
+            if int(photo.photo_id) == sentinel:
+                is_new_photo = True
+
+        return len(photo_new_list) != 0, photo_new_list

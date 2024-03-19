@@ -6,8 +6,6 @@ Response Entity
 
 """
 
-DictModel = AdvancedEasyAccessDict
-
 
 class JmResp:
 
@@ -87,11 +85,11 @@ class JmJsonResp(JmResp):
     def json(self) -> Dict:
         try:
             return self.resp.json()
-        except Exception:
-            ExceptionTool.raises_resp('json解析失败', self, JsonResolveFailException)
+        except Exception as e:
+            ExceptionTool.raises_resp(f'json解析失败: {e}', self, JsonResolveFailException)
 
-    def model(self) -> DictModel:
-        return DictModel(self.json())
+    def model(self) -> AdvancedDict:
+        return AdvancedDict(self.json())
 
 
 class JmApiResp(JmJsonResp):
@@ -120,9 +118,9 @@ class JmApiResp(JmJsonResp):
         return loads(self.decoded_data)
 
     @property
-    def model_data(self) -> DictModel:
+    def model_data(self) -> AdvancedDict:
         self.require_success()
-        return DictModel(self.res_data)
+        return AdvancedDict(self.res_data)
 
 
 # album-comment
@@ -469,11 +467,14 @@ class JmcomicClient(
     def of_api_url(self, api_path, domain):
         raise NotImplementedError
 
-    def get_html_domain(self, postman=None):
-        return JmModuleConfig.get_html_domain(postman or self.get_root_postman())
+    def get_html_domain(self):
+        return JmModuleConfig.get_html_domain(self.get_root_postman())
 
-    def get_html_domain_all(self, postman=None):
-        return JmModuleConfig.get_html_domain_all(postman or self.get_root_postman())
+    def get_html_domain_all(self):
+        return JmModuleConfig.get_html_domain_all(self.get_root_postman())
+
+    def get_html_domain_all_via_github(self):
+        return JmModuleConfig.get_html_domain_all_via_github(self.get_root_postman())
 
     # noinspection PyMethodMayBeStatic
     def do_page_iter(self, params: dict, page: int, get_page_method):
