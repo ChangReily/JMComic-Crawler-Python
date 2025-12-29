@@ -58,130 +58,123 @@ class CacheRegistry:
 
 
 class DirRule:
-    rule_sample = [
-        # 根目录 / Album-id / Photo-序号 /
-        'Bd_Aid_Pindex',  # 禁漫网站的默认下载方式
-        # 根目录 / Album-作者 / Album-标题 / Photo-序号 /
-        'Bd_Aauthor_Atitle_Pindex',
-        # 根目录 / Photo-序号&标题 /
-        'Bd_Pindextitle',
-        # 根目录 / Photo-自定义类属性 /
-        'Bd_Aauthor_Atitle_Pcustomfield',
-        # 需要替换JmModuleConfig.CLASS_ALBUM / CLASS_PHOTO才能让自定义属性生效
-    ]
+    RULE_BASE_DIR = 'Bd'
 
-    Detail = Union[JmAlbumDetail, JmPhotoDetail, None]
-    RuleFunc = Callable[[Detail], str]
-    RuleSolver = Tuple[int, RuleFunc, str]
-    RuleSolverList = List[RuleSolver]
-
-    rule_solver_cache: Dict[str, RuleSolver] = {}
-
-    def __init__(self, rule: str, base_dir=None):
+    def __init__(self, rule: str, base_dir=None, normalize_zh=None):
+        """
+        :param rule: DSL rule
+        :param base_dir: base directory
+        :param normalize_zh: 'zh-cn'|'zh-tw'| or None. 控制是否以及如何进行繁简体归一化，默认 None
+        """
         base_dir = JmcomicText.parse_to_abspath(base_dir)
         self.base_dir = base_dir
         self.rule_dsl = rule
-        self.solver_list = self.get_role_solver_list(rule, base_dir)
+        self.normalize_zh = normalize_zh
+        self.parser_list: List[Tuple[str, Callable]] = self.get_rule_parser_list(rule)
 
     def decide_image_save_dir(self,
                               album: JmAlbumDetail,
                               photo: JmPhotoDetail,
                               ) -> str:
+        return self.apply_rule_to_path(album, photo)
+
+    def decide_album_root_dir(self, album: JmAlbumDetail) -> str:
+        return self.apply_rule_to_path(album, None, True)
+
+    def apply_rule_to_path(self, album, photo, only_album_rules=False) -> str:
         path_ls = []
-        for solver in self.solver_list:
+        for rule, parser in self.parser_list:
+            if only_album_rules and not (rule == self.RULE_BASE_DIR or rule.startswith('A')):
+                continue
+
             try:
-                ret = self.apply_rule_solver(album, photo, solver)
+                path = parser(album, photo, rule)
             except BaseException as e:
                 # noinspection PyUnboundLocalVariable
-                jm_log('dir_rule', f'路径规则"{solver[2]}"的解析出错: {e}, album={album}, photo={photo}')
+                jm_log('dir_rule', f'路径规则"{rule}"的解析出错: {e}, album={album}, photo={photo}')
                 raise e
+            if parser != self.parse_bd_rule:
+                # 根据配置 normalize_zh 进行繁简体统一
+                conv_path = JmcomicText.to_zh(str(path), self.normalize_zh)
+                path = fix_windir_name(conv_path).strip()
 
-            path_ls.append(str(ret))
+            path_ls.append(path)
 
-        return fix_filepath('/'.join(path_ls), is_dir=True)
+        return fix_filepath('/'.join(path_ls))
 
-    def get_role_solver_list(self, rule_dsl: str, base_dir: str) -> RuleSolverList:
+    def get_rule_parser_list(self, rule_dsl: str):
         """
         解析下载路径dsl，得到一个路径规则解析列表
         """
 
         rule_list = self.split_rule_dsl(rule_dsl)
-        solver_ls: List[DirRule.RuleSolver] = []
+        parser_list: list = []
 
         for rule in rule_list:
-            rule = rule.strip()
-            if rule == 'Bd':
-                solver_ls.append((0, lambda _: base_dir, 'Bd'))
+            if rule == self.RULE_BASE_DIR:
+                parser_list.append((rule, self.parse_bd_rule))
                 continue
 
-            rule_solver = self.get_rule_solver(rule)
-            if rule_solver is None:
+            parser = self.get_rule_parser(rule)
+            if parser is None:
                 ExceptionTool.raises(f'不支持的dsl: "{rule}" in "{rule_dsl}"')
 
-            solver_ls.append(rule_solver)
+            parser_list.append((rule, parser))
 
-        return solver_ls
+        return parser_list
+
+    # noinspection PyUnusedLocal
+    def parse_bd_rule(self, album, photo, rule):
+        return self.base_dir
+
+    @classmethod
+    def parse_f_string_rule(cls, album, photo, rule: str):
+        properties = {}
+        if album:
+            properties.update(album.get_properties_dict())
+        if photo:
+            properties.update(photo.get_properties_dict())
+        return rule.format(**properties)
+
+    @classmethod
+    def parse_detail_rule(cls, album, photo, rule: str):
+        detail = album if rule.startswith('A') else photo
+        return str(DetailEntity.get_dirname(detail, rule[1:]))
 
     # noinspection PyMethodMayBeStatic
     def split_rule_dsl(self, rule_dsl: str) -> List[str]:
-        if rule_dsl == 'Bd':
-            return [rule_dsl]
-
         if '/' in rule_dsl:
-            return rule_dsl.split('/')
+            rule_list = rule_dsl.split('/')
+        elif '_' in rule_dsl:
+            rule_list = rule_dsl.split('_')
+        else:
+            rule_list = [rule_dsl]
 
-        if '_' in rule_dsl:
-            return rule_dsl.split('_')
+        for i, e in enumerate(rule_list):
+            rule_list[i] = e.strip()
 
-        ExceptionTool.raises(f'不支持的rule配置: "{rule_dsl}"')
+        if rule_list[0] != self.RULE_BASE_DIR:
+            rule_list.insert(0, self.RULE_BASE_DIR)
 
-    @classmethod
-    def get_rule_solver(cls, rule: str) -> Optional[RuleSolver]:
-        # 查找缓存
-        if rule in cls.rule_solver_cache:
-            return cls.rule_solver_cache[rule]
-
-        # 检查dsl
-        if not rule.startswith(('A', 'P')):
-            return None
-
-        # Axxx or Pyyy
-        key = 1 if rule[0] == 'A' else 2
-
-        def solve_func(detail):
-            return fix_windir_name(str(DetailEntity.get_dirname(detail, rule[1:])))
-
-        # 保存缓存
-        rule_solver = (key, solve_func, rule)
-        cls.rule_solver_cache[rule] = rule_solver
-        return rule_solver
+        return rule_list
 
     @classmethod
-    def apply_rule_solver(cls, album, photo, rule_solver: RuleSolver) -> str:
-        """
-        应用规则解析器(RuleSolver)
+    def get_rule_parser(cls, rule: str):
+        if '{' in rule:
+            return cls.parse_f_string_rule
 
-        :param album: JmAlbumDetail
-        :param photo: JmPhotoDetail
-        :param rule_solver: Ptitle
-        :returns: photo.title
-        """
+        if rule.startswith(('A', 'P')):
+            return cls.parse_detail_rule
 
-        def choose_detail(key):
-            if key == 0:
-                return None
-            if key == 1:
-                return album
-            if key == 2:
-                return photo
-
-        key, func, _ = rule_solver
-        detail = choose_detail(key)
-        return func(detail)
+        return cls.parse_f_string_rule
+        # ExceptionTool.raises(f'不支持的rule配置: "{rule}"')
 
     @classmethod
-    def apply_rule_directly(cls, album, photo, rule: str) -> str:
-        return cls.apply_rule_solver(album, photo, cls.get_rule_solver(rule))
+    def apply_rule_to_filename(cls, album, photo, rule: str) -> str:
+        if album is None:
+            album = photo.from_album
+        # noinspection PyArgumentList
+        return fix_windir_name(cls.get_rule_parser(rule)(album, photo, rule)).strip()
 
 
 class JmOption:
@@ -216,6 +209,7 @@ class JmOption:
             dir_rule={
                 'rule': self.dir_rule.rule_dsl,
                 'base_dir': self.dir_rule.base_dir,
+                'normalize_zh': self.dir_rule.normalize_zh,
             },
             download=self.download.src_dict,
             client=self.client.src_dict,
@@ -235,28 +229,6 @@ class JmOption:
     # noinspection PyMethodMayBeStatic,PyUnusedLocal
     def decide_photo_batch_count(self, album: JmAlbumDetail):
         return self.download.threading.photo
-
-    def decide_album_dir(self, album: JmAlbumDetail) -> str:
-        """
-        该方法目前仅在 plugin-zip 中使用，不建议外部调用
-        """
-        dir_layer = []
-        dir_rule = self.dir_rule
-        for rule in dir_rule.rule_dsl.split('_'):
-            if rule == 'Bd':
-                dir_layer.append(dir_rule.base_dir)
-                continue
-
-            if rule[0] == 'A':
-                name = dir_rule.apply_rule_directly(album, None, rule)
-                dir_layer.append(name)
-
-            if rule[0] == 'P':
-                break
-
-        from os.path import join
-        # noinspection PyTypeChecker
-        return join(*dir_layer)
 
     # noinspection PyMethodMayBeStatic
     def decide_image_filename(self, image: JmImageDetail) -> str:
@@ -285,7 +257,7 @@ class JmOption:
         )
 
         if ensure_exists:
-            mkdir_if_not_exists(save_dir)
+            save_dir = JmcomicText.try_mkdir(save_dir)
 
         return save_dir
 
@@ -359,10 +331,11 @@ class JmOption:
     def deconstruct(self) -> Dict:
         return {
             'version': JmModuleConfig.JM_OPTION_VER,
-            'log': JmModuleConfig.flag_enable_jm_log,
+            'log': JmModuleConfig.FLAG_ENABLE_JM_LOG,
             'dir_rule': {
                 'rule': self.dir_rule.rule_dsl,
                 'base_dir': self.dir_rule.base_dir,
+                'normalize_zh': self.dir_rule.normalize_zh,
             },
             'download': self.download.src_dict,
             'client': self.client.src_dict,
@@ -400,7 +373,13 @@ class JmOption:
         """
         return self.new_jm_client(**kwargs)
 
-    def new_jm_client(self, domain_list=None, impl=None, cache=None, **kwargs) -> Union[JmHtmlClient, JmApiClient]:
+    def new_jm_client(self,
+                      domain_list=None,
+                      impl=None,
+                      cache=None,
+                      domain_retry_strategy=None,
+                      **kwargs
+                      ) -> Union[JmHtmlClient, JmApiClient]:
         """
         创建新的Client（客户端），不同Client之间的元数据不共享
         """
@@ -457,10 +436,11 @@ class JmOption:
         if clazz == AbstractJmClient or not issubclass(clazz, AbstractJmClient):
             raise NotImplementedError(clazz)
 
-        client: AbstractJmClient = clazz(
+        client: JmcomicClient = clazz(
             postman=postman,
             domain_list=decide_domain_list(),
             retry_times=retry_times,
+            domain_retry_strategy=domain_retry_strategy,
         )
 
         # enable cache
@@ -478,7 +458,7 @@ class JmOption:
             orig_cookies.update(cookies)
             metadata['cookies'] = orig_cookies
 
-    # noinspection PyMethodMayBeStatic
+    # noinspection PyMethodMayBeStatic,PyTypeChecker
     def decide_client_domain(self, client_key: str) -> List[str]:
         def is_client_type(ctype) -> bool:
             return self.client_key_is_given_type(client_key, ctype)
@@ -524,13 +504,21 @@ class JmOption:
 
     # 下面的方法提供面向对象的调用风格
 
-    def download_album(self, album_id):
+    def download_album(self,
+                       album_id,
+                       downloader=None,
+                       callback=None,
+                       ):
         from .api import download_album
-        download_album(album_id, self)
+        download_album(album_id, self, downloader, callback)
 
-    def download_photo(self, photo_id):
+    def download_photo(self,
+                       photo_id,
+                       downloader=None,
+                       callback=None
+                       ):
         from .api import download_photo
-        download_photo(photo_id, self)
+        download_photo(photo_id, self, downloader, callback)
 
     # 下面的方法为调用插件提供支持
 

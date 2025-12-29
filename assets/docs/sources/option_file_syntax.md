@@ -1,13 +1,10 @@
-# Option File Syntax
+# 配置文件指南
 
 ## 1. 配置前需知
 
-* option有`默认值`，当你使用配置文件来创建option时，你配置文件中的值会覆盖`默认值`。
+* option有`默认值`，你配置文件中的配置项会覆盖`默认值`。因此你只需要添加感兴趣的配置项即可。
 
-  因此，在配置option时，不需要配置全部的值，只需要配置特定部分即可。
-* 你可以使用下面的代码来得到option的默认值，你可以删除其中的大部分配置项，只保留你要覆盖的配置项
-
-* **下面的插件配置，kwargs参数支持引用环境变量，语法为 ${环境变量名}**
+* 你也可以使用下面的代码来得到option的默认值。你可以删除其中的大部分配置项，只保留你要覆盖的配置项。
 
 ```python
 from jmcomic import JmOption
@@ -16,9 +13,9 @@ JmOption.default().to_file('./option.yml') # 创建默认option，导出为optio
 
 ## 2. option常规配置项
 
-```yml
-# 开启jmcomic的日志输入，默认为true
-# 对日志有需求的可进一步参考文档
+```yaml
+# 开启jmcomic的日志输出，默认为true
+# 对日志有需求的可进一步参考文档 → https://jmcomic.readthedocs.io/en/latest/tutorial/11_log_custom/
 log: true
 
 # 配置客户端相关
@@ -26,17 +23,21 @@ client:
   # impl: 客户端实现类，不配置默认会使用JmModuleConfig.DEFAULT_CLIENT_IMPL
   # 可配置:
   #  html - 表示网页端
-  #  api - 表示使用APP端
+  #  api - 表示APP端
+  # APP端不限ip兼容性好，网页端限制ip地区但效率高
   impl: html
 
-  # domain: 域名配置，默认是 []，表示运行时自动获取域名。
-  # 可配置特定域名，如下：
-  # 程序会先用第一个域名，如果第一个域名重试n次失败，则换下一个域名重试，以此类推。
+  # domain: 禁漫域名配置，一般无需配置，jmcomic会根据上面的impl自动设置相应域名
+  # 该配置项需要和上面的impl结合使用，因为禁漫网页端和APP端使用的是不同域名，
+  # 所以配置是一个dict结构，key是impl的值，value是域名列表，表示这个impl走这些域名。
+  # 域名列表的使用顺序是：先用第一个域名，如果第一个域名重试n次失败，则换下一个域名重试，以此类推。
+  # 下面是示例：（注意下面这些域名可能会过时，不一定能用）
   domain:
-    - jm-comic.org
-    - jm-comic2.cc
-    - 18comic.vip
-    - 18comic.org
+    html:
+      - 18comic.vip
+      - 18comic.org
+    api:
+      - www.jmapiproxyxxx.vip
 
   # retry_times: 请求失败重试次数，默认为5
   retry_times: 5
@@ -95,20 +96,43 @@ dir_rule:
   # 写法:
   # 1. 以'Bd'开头，表示根目录
   # 2. 文件夹每增加一层，使用 '_' 或者 '/' 区隔
-  # 3. 用Pxxx或者Ayyy指代文件夹名，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。xxx和yyy可以写什么需要看源码。
+  # 3. 用Pxxx或者Ayyy指代文件夹名，意思是 JmPhotoDetail.xxx / JmAlbumDetail的.yyy。
+  # xxx和yyy可以写什么需要看源码，或通过下面代码打印出所有可用的值
+  # 
+  # ```python
+  # import jmcomic
+  # properties: dict = jmcomic.JmOption.default().new_jm_client().get_album_detail(本子id).get_properties_dict()
+  # print(properties)
+  # ```
   # 
   # 下面演示如果要使用禁漫网站的默认下载方式，该怎么写:
   # 规则: 根目录 / 本子id / 章节序号 / 图片文件
   # rule: 'Bd  / Aid   / Pindex'
   # rule: 'Bd_Aid_Pindex'
-
   # 默认规则是: 根目录 / 章节标题 / 图片文件
-  rule: Bd_Ptitle
+  rule: Bd / Ptitle
+  # jmcomic v2.5.36 以后，支持使用python的f-string的语法组合文件夹名，下为示例
+  # rule: Bd / Aauthor / (JM{Aid}-{Pindex})-{Pname}
+  # {}大括号里的内容同样是写 Axxx 或 Pxxx，其他语法自行参考python f-string的语法
+  # 另外，rule开头的Bd可忽略不写，因为程序会自动插入Bd
+
+  # normalize_zh: 可选。控制是否对目录/文件名中的中文进行繁简体规范化。
+  #   - None（默认）：不做任何转换，保持历史行为
+  #   - zh-cn：将中文文本规范为简体
+  #   - zh-tw：将中文文本规范为繁体
+  # 该功能依赖可选库 `zhconv`（非必需），若未安装或转换失败，程序会回退到原字符串并继续工作，不会影响下载流程。
+  # 示例：
+  # dir_rule:
+  #   base_dir: D:/a/b/c/
+  #   rule: Bd / Ptitle
+  #   normalize_zh: zh-cn
 ```
 
 ## 3. option插件配置项
 
-```yml
+* **插件配置中的kwargs参数支持引用环境变量，语法为 ${环境变量名}**
+
+```yaml
 # 插件的配置示例
 plugins:
   after_init:
@@ -130,20 +154,26 @@ plugins:
       kwargs:
         allowed_orig_suffix: # 后缀列表，表示只想下载以.gif结尾的图片
           - .gif
-
+    - plugin: replace_path_string # 字符串替换插件，直接对下载文件夹的路径进行文本替换
+      kwargs:
+        replace: 
+          # {左边写你要替换的原文}: {右边写替换成什么文本}
+          aaa: bbb
+          kyockcho: きょくちょ
+          
     - plugin: client_proxy # 客户端实现类代理插件，不建议非开发人员使用
       kwargs:
         proxy_client_key: photo_concurrent_fetcher_proxy # 代理类的client_key
         whitelist: [ api, ] # 白名单，当client.impl匹配白名单时才代理
 
-    - plugin: auto_set_browser_cookies # 自动获取浏览器cookies，详见插件类
+    - plugin: auto_set_browser_cookies # 自动获取浏览器cookies，详见插件类代码→AutoSetBrowserCookiesPlugin
       kwargs:
         browser: chrome
         domain: 18comic.vip
     
     # v2.5.0 引入的插件
     # 可以启动一个服务器，可以在浏览器上查看本子
-    # 基于flask框架，需要安装额外库: pip install plugin_jm_server
+    # 基于flask框架，需要安装额外库: [pip install plugin_jm_server]
     # 源码：https://github.com/hect0x7/plugin-jm-server
     - plugin: jm_server 
       kwargs:
@@ -166,22 +196,80 @@ plugins:
     - plugin: subscribe_album_update # 自动订阅本子并下载、发送邮件通知的插件
       kwargs:
         download_if_has_update: true
-        email_notify: # 见下【发送qq邮件插件】
-          msg_from: x
-          msg_to: x
-          password: x
+        email_notify: # 参数说明见下【发送qq邮件插件】
+          msg_from: aaa@qq.com
+          msg_to: aaa@qq.com
+          password: dkjlakdjlkas
           title: album update !!!
           content: album update !!!
         album_photo_dict:
           324930: 424507
 
+  before_album:
+    - plugin: download_cover # 额外下载本子封面的插件
+      kwargs:
+        size: '_3x4' # 可选项，禁漫搜索页的封面图尺寸是 4x3，和详情页不一样，想下搜索页的封面就设置此项
+        dir_rule: # 封面图存放路径规则，写法同上
+          base_dir: D:/a/b/c/
+          rule: '{Atitle}/{Aid}_cover.jpg'
+    
+
   after_album:
     - plugin: zip # 压缩文件插件
       kwargs:
         level: photo # 按照章节，一个章节一个压缩文件
+        # level 也可以配成 album，表示一个本子对应一个压缩文件，该压缩文件会包含这个本子的所有章节
+
         filename_rule: Ptitle # 压缩文件的命名规则
+        # 请注意⚠ [https://github.com/hect0x7/JMComic-Crawler-Python/issues/223#issuecomment-2045227527]
+        # filename_rule和level有对应关系
+        # 如果level=[photo], filename_rule只能写Pxxx
+        # 如果level=[album], filename_rule只能写Axxx
+
         zip_dir: D:/jmcomic/zip/ # 压缩文件存放的文件夹
+
+        suffix: zip #压缩包后缀名，默认值为zip，可以指定为zip或者7z
+
+        # v2.6.0 以后，zip插件也支持dir_rule配置项，可以替代旧版本的zip_dir和filename_rule
+        # 请注意⚠ 使用此配置项会使filename_rule，zip_dir，suffix三个配置项无效，与这三个配置项同时存在时仅会使用dir_rule
+        # 示例如下:
+        # dir_rule: # 新配置项，可取代旧的zip_dir和filename_rule
+        #   base_dir: D:/jmcomic-zip
+        #   rule: 'Bd / {Atitle} / [{Pid}]-{Ptitle}.zip'  # 设置压缩文件夹规则，中间Atitle表示创建一层文件夹，名称是本子标题。[{Pid}]-{Ptitle}.zip 表示压缩文件的命名规则(需显式写出后缀名)
+        # 使用此方法指定压缩包存储路径则无需和level对应
+
         delete_original_file: true # 压缩成功后，删除所有原文件和文件夹
+        
+        # 在v2.6.0及以后版本，zip插件还支持设置密码和加密方式，使用encrypt配置项，该配置是可选的，示例如下：
+        # 1. 给压缩包设置一个指定密码
+        # encrypt:
+        #   password: 123456
+        # 2. 设置随机生成的密码。该密码会在日志中打印出来，并附着到zip的压缩文件注释里
+        # encrypt:
+        #   type: random
+        # 配置密码时，type和password二选一必填
+        
+        # 插件还支持使用7z加密，这种方式会加密压缩包文件头，只有输入了密码才能查看压缩包文件列表，隐私性最好。
+        # 使用encrypt.impl配置项开启7z格式加密，如果不配置，默认仍使用zip格式。
+        # 使用7z格式时记得把压缩包后缀名指定为7z。
+        # 示例如下:
+        # suffix: 7z
+        # encrypt:
+        #   impl: 7z
+        #   type: random # type和password二选一必填，和上面一样
+        # 需要提醒的是，7z没有压缩文件注释，因此如果设置随机密码，密码就只会存在于日志中，请注意及时保存密码。
+         
+    
+    # 删除重复文件插件
+    # 参考 → [https://github.com/hect0x7/JMComic-Crawler-Python/issues/244]
+    - plugin: delete_duplicated_files
+      kwargs:
+        # limit: 必填，表示对md5出现次数的限制
+        limit: 3
+        # 如果文件的md5的出现次数 >= limit，是否要删除
+        # 如果delete_original_file不配置，此插件只会打印信息，不会执行其他操作
+        # 如果limit=1, delete_original_file=true 效果会是删除所有文件 
+        delete_original_file: true
 
     - plugin: send_qq_email # 发送qq邮件插件
       kwargs:
@@ -195,15 +283,38 @@ plugins:
     - plugin: favorite_folder_export # 导出收藏夹插件
       log: false
       kwargs:
-        zip_enable: true # 对收藏夹进行压缩
+        zip_enable: true # 对导出文件进行压缩
         zip_filepath: ${JM_DOWNLOAD_DIR}/export.zip # 压缩文件路径
         zip_password: ${ZIP_PASSWORD} # 压缩密码
+  
+  before_photo:
+    - plugin: skip_photo_with_few_images # 跳过下载章节图片数量过少的章节。一些韩漫的章节是公告，没有实际内容，就可以用该插件来跳过下载这些章节。
+      kwargs:
+        at_least_image_count: 3 # 至少要有多少张图，才下载此章节
 
   after_photo:
-    - plugin: j2p # jpg图片合成为一个pdf插件
+    # 把章节的所有图片合并为一个pdf的插件
+    # 使用前需要安装依赖库: [pip install img2pdf]
+    - plugin: img2pdf
       kwargs:
-        pdf_dir: D:/pdf # pdf存放文件夹
-        filename_rule: Pid # pdf命名规则
-        quality: 100 # pdf质量，0 - 100
-
+        pdf_dir: D:/pdf/ # pdf存放文件夹
+        filename_rule: Pid # pdf命名规则，P代表photo, id代表使用photo.id也就是章节id
+        encrypt: # pdf密码，可选配置项
+          password: 123 # 密码
+  
+    # img2pdf也支持合并整个本子，把上方的after_photo改为after_album即可。
+    # https://github.com/hect0x7/JMComic-Crawler-Python/discussions/258
+    # 配置到after_album时，需要修改filename_rule参数，不能写Pxx只能写Axx示例如下
+    - plugin: img2pdf
+      kwargs:
+        pdf_dir: D:/pdf/ # pdf存放文件夹
+        filename_rule: Aname # pdf命名规则，A代表album, name代表使用album.name也就是本子名称
+  
+    # 插件来源：https://github.com/hect0x7/JMComic-Crawler-Python/pull/294
+    # long_img插件是把所有图片合并为一个png长图，效果和img2pdf类似
+    - plugin: long_img
+      kwargs:
+        img_dir: D:/pdf/ # 长图存放文件夹
+        filename_rule: Aname # 长图命名规则，同上
+  
 ```
